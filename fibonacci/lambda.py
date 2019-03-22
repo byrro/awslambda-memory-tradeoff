@@ -24,6 +24,7 @@ def handler(event: Dict, context: Dict) -> Dict:
     return {
         'cold_start': cold_start,
         'n_th': n_th,
+        'remaining_time': context.get_remaining_time_in_millis(),
     }
 
 

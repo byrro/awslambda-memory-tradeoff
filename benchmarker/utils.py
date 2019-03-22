@@ -50,18 +50,14 @@ def invoke_lambda(
         payload = response['Payload'].read(amt=None).decode('utf-8')
         response['Payload'] = json.loads(payload)
 
-    except json.decoder.JSONDecodeError:
+    except (TypeError, json.decoder.JSONDecodeError):
         logger.error('Unable to parse Lambda Payload JSON response.')
         response['Payload'] = None
 
     return response
 
 
-def update_lambda_config(
-        *,
-        function_name: str,
-        **kwargs,
-        ) -> Dict:
+def update_lambda_config(*, function_name: str, **kwargs) -> Dict:
     aws_lambda = lambda_client()
 
     config_args = {

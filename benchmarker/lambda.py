@@ -1,14 +1,14 @@
 '''AWS Lambda to benchmark performance with different memory allocations'''
 from typing import Dict
 from benchmark import Benchmark
-import constants as c
 
 
 def handler(event: Dict, context: Dict) -> Dict:
     '''Lambda handler function
 
-    Arguments expected in event:
+    Arguments accepted in event:
 
+    :verbose: (bool) whether to run in verbose mode with log output
     :ignore_coldstart: (bool) whether to ignore results from cold starts when
         computing Lambda performance speed
     :test_count: (int) how many tests to run with each memory allocation
@@ -20,30 +20,28 @@ def handler(event: Dict, context: Dict) -> Dict:
     '''
     benchmarking = Benchmark(**event)
 
-    benchmarking.run()
+    results = benchmarking.run().results
 
     return {
-        'results': benchmarking.results,
+        'results': results,
     }
 
 
 if __name__ == '__main__':
+    import pprint
+
+    pp = pprint.PrettyPrinter(indent=4)
+
     event = {
+        'verbose': True,
+        'ignore_coldstart': True,
+        'test_count': 50,
         'max_threads': 10,
         'lambda_function': 'fibonacci',
-        'lambda_event': {
-            'n': 30,
-        },
-        'fibonacci_nth': 30,
-        'memory_sets': [
-            128,
-            256,
-            512,
-            768,
-            1024,
-            1536,
-            2048,
-            2560,
-            3008,
-        ],
+        'lambda_event': {'n': 30},
+        'memory_sets': [128, 256, 512, 768, 1024, 1536, 2048, 2560, 3008],
     }
+
+    results = handler(event=event, context={})
+
+    pp.pprint(results)
