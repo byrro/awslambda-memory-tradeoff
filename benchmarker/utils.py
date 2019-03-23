@@ -51,7 +51,7 @@ def invoke_lambda(
         response['Payload'] = json.loads(payload)
 
     except (TypeError, json.decoder.JSONDecodeError):
-        logger.error('Unable to parse Lambda Payload JSON response.')
+        logger.warning('Unable to parse Lambda Payload JSON response.')
         response['Payload'] = None
 
     return response

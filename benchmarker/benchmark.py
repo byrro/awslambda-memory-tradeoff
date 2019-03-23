@@ -80,18 +80,12 @@ class Benchmark():
             'errors': [],
         }
 
-        response, memory_set_success = self.set_memory(new_memory=memory)
+        response, success, error = self.set_memory(new_memory=memory)
 
         time.sleep(c.SLEEP_AFTER_NEW_MEMORY_SET)
 
-        if not memory_set_success:
+        if not success:
             result['success'] = False
-
-            error = custom_exc.SetLambdaMemoryError(
-                f'Cannot allocate new memory size ({memory} mb) to function '
-                f'({self.lambda_function}).'
-            )
-
             result['errors'].append(str(error))
 
             logger.warning(error)
@@ -100,10 +94,10 @@ class Benchmark():
 
         while len(result['execution_times']) < self.test_count:
             with ThreadPoolExecutor(self.max_threads) as executor:
-                sub_results = executor.map(self.check_execution_time)
+                result = executor.map(self.check_execution_time)
 
-                result['execution_times'].extend(
-                    [r for r in sub_results if not r['cold_start']])
+                if result['success'] and not result['cold_start']:
+                    result['execution_times'].extend(result['duration'])
 
         return result
 
@@ -118,16 +112,32 @@ class Benchmark():
             new_timeout: int = c.DEFAULT_LAMBDA_TIMEOUT
             ) -> bool:
         '''Set new memory for the Lambda'''
-        response = update_lambda_config(
-            function_name=self.lambda_function,
-            memory_size=new_memory,
-            timeout=new_timeout,
-        )
+        response = None
+        success = False
+        error = None
 
-        return response, self.is_lambda_response_success(
-            operation='set_memory',
-            response=response,
-        )
+        try:
+            response = update_lambda_config(
+                function_name=self.lambda_function,
+                memory_size=new_memory,
+                timeout=new_timeout,
+            )
+
+            success = self.is_lambda_response_success(
+                operation='set_memory',
+                response=response,
+            )
+
+        except Exception as exc:
+            error = custom_exc.SetLambdaMemoryError(
+                f'Cannot allocate new memory size ({new_memory} mb) to '
+                f'function ({self.lambda_function})'
+            )
+
+            logger.warning(error)
+            logger.exception(exc)
+
+        return response, success, error
 
     def is_lambda_response_success(self, *, operation, response):
         '''Validate Lambda response'''
@@ -155,9 +165,7 @@ class Benchmark():
             )
 
             # Check whether payload has expected info
-            if type(response.get('Payload')) is not dict or \
-                    type(response['Payload'].get('remaining_time')) is not int:
-
+            if type(response.get('Payload')) is not dict:
                 error = custom_exc.LambdaPayloadError(
                     'Error in Lambda response Payload (type is not a Dict)'
                 )
@@ -166,8 +174,17 @@ class Benchmark():
 
                 result['error'] = str(error)
 
+            elif type(response['Payload'].get('remaining_time')) is not int:
+                error = custom_exc.LambdaPayloadError(
+                    'No Integer "remaining_time" in Lambda Payload'
+                )
+
+                logger.warning(error)
+
+                result['error'] = str(error)
+
             else:
-                result['success'] = 200
+                result['success'] = True
 
                 result['duration'] = c.DEFAULT_LAMBDA_TIMEOUT - \
                     response['Payload']['remaining_time']
