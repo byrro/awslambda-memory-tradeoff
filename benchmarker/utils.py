@@ -73,3 +73,10 @@ def update_lambda_config(*, function_name: str, **kwargs) -> Dict:
     response = aws_lambda.update_function_configuration(**config_args)
 
     return response
+
+
+def get_lambda_config(*, function_name):
+    '''Get current configuration parameters for a given Lambda function'''
+    aws_lambda = lambda_client()
+
+    

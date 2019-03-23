@@ -126,6 +126,18 @@ class TestBenchmark(unittest.TestCase):
     def setUp(self):
         self.benchmarking = Benchmark()  # Use default arguments
 
+    def test_original_config_stringifier(self):
+        '''Test stringifier of original Lambda configurations'''
+        result_set = self.benchmarking.set_original(memory=1024, timeout=60000)
+
+        self.assertTrue(result_set['memory'])
+        self.assertTrue(result_set['timeout'])
+
+        self.assertIsInstance(self.benchmarking.original_config_str, str)
+
+        expected_str = 'memory: 1024, timeout: 60000'
+        self.assertEqual(self.benchmarking.original_config_str, expected_str)
+
     @patch('benchmark.update_lambda_config', new_callable=CustomMock.set_new_memory)  # NOQA
     @patch('benchmark.logger')
     def test_set_new_memory(self, logger, update_lambda_config):

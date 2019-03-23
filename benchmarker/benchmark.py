@@ -6,7 +6,8 @@ import json
 import time
 from typing import (
     Dict,
-    List
+    List,
+    Union,
 )
 import constants as c
 import custom_exceptions as custom_exc
@@ -32,6 +33,7 @@ class Benchmark():
             memory_sets: List[int] = c.DEFAULT_MEMORY_SETS,
             **kwargs,
             ):
+        # Public attributes
         self.verbose = verbose
         self.ignore_coldstart = ignore_coldstart
         self.test_count = test_count
@@ -40,34 +42,97 @@ class Benchmark():
         self.lambda_event = lambda_event
         self.memory_sets = memory_sets
 
-        self.results = {
-            memory: {'average': None, 'invocations': [], 'errors': []}
-            for memory in self.memory_sets
-        }
-
-        self.original_config = {
-            'timeout': None,
+        # Internal attributes
+        self._results = {}
+        self._benchmark_results = []
+        self._original_config = {
             'memory': None,
+            'timeout': None,
         }
 
-        self.store_initial_config()
+    @property
+    def results(self):
+        return self._results
 
-    def store_initial_config(self) -> Dict:
+    @property
+    def original_config(self):
+        return self._original_config
+
+    @property
+    def original_config_str(self):
+        config_options = []
+
+        for key, val in self.original_config.items():
+            config_options.append(f'{key}: {str(val)}')
+
+        return ', '.join(config_options)
+
+    def set_original(
+            self,
+            *,
+            memory: Union[int, None] = None,
+            timeout: Union[int, None] = None,
+            ) -> Dict:
+        '''Set value for original Lambda configuration parameter'''
+        result = {'memory': False, 'timeout': False}
+
+        if type(memory) is int:
+            self._original_config['memory'] = memory
+            result['memory'] = True
+
+        elif type(memory) is not None:
+            raise custom_exc.SetOriginalConfigError(
+                f'Error setting reference for memory ({memory}) original '
+                'Lambda configuration'
+            )
+
+        if type(timeout) is int:
+            self._original_config['timeout'] = timeout
+            result['timeout'] = True
+
+        elif type(timeout) is not None:
+            raise custom_exc.SetOriginalConfigError(
+                f'Error setting reference for timeout ({timeout}) original '
+                'Lambda configuration'
+            )
+
+        return result
+
+    def store_original_config(self) -> bool:
         '''Get original Lambda configuration to restore after benchmarking'''
-        pass
+        return True
+
+    def restore_original_config(self, original_config: Dict) -> bool:
+        '''Restore original Lambda configuration'''
+        return True
 
     def run(self) -> Dict[str, Dict]:
         '''Run benchmarking routine'''
-        for memory in self.memory_sets:
-            benchmark_results = self.benchmark_memory(memory=memory)
+        self.results = {}
+        self.benchmark_results = []
 
-            average, invocations, errors = self.process_results(
-                results=benchmark_results,
+        self.store_original_config()
+
+        for memory in self.memory_sets:
+            benchmark_result = self.benchmark_memory(memory=memory)
+            self.benchmark_results.append(benchmark_result)
+
+        self.process_benchmark_results(
+            benchmark_results=self.benchmark_results
+        )
+
+        restored, restore_error = self.restore_original_config(
+            config=self.original_config
+        )
+
+        if not restored:
+            error = custom_exc.RestoreOriginalConfigError(
+                f'Cannot restore Lambda ({self.lambda_function}) original '
+                f'configurations: {self.original_config_str}'
             )
 
-            self.results['average'] = average
-            self.results['invocations'] = invocations
-            self.results['errors'] = errors
+            logger.warning(error)
+            logger.exception(restore_error)
 
         return self
 
@@ -76,7 +141,7 @@ class Benchmark():
         result = {
             'memory': memory,
             'success': None,
-            'execution_times': [],
+            'durations': [],
             'errors': [],
         }
 
@@ -92,16 +157,16 @@ class Benchmark():
             logger.warning('Lambda API response:')
             print(json.dumps(response))
 
-        while len(result['execution_times']) < self.test_count:
+        while len(result['durations']) < self.test_count:
             with ThreadPoolExecutor(self.max_threads) as executor:
                 result = executor.map(self.check_execution_time)
 
                 if result['success'] and not result['cold_start']:
-                    result['execution_times'].extend(result['duration'])
+                    result['durations'].extend(result['duration'])
 
         return result
 
-    def populate_results(self, *, results) -> Dict:
+    def process_benchmark_results(self, *, benchmark_results) -> Dict:
         '''Process results from Lambda benchmarking'''
         pass
 
@@ -138,14 +203,6 @@ class Benchmark():
             logger.exception(exc)
 
         return response, success, error
-
-    def is_lambda_response_success(self, *, operation, response):
-        '''Validate Lambda response'''
-        if response['StatusCode'] in (200, 202, 204):
-            return True
-
-        else:
-            return False
 
     def check_execution_time(self) -> Dict:
         '''Invoke the Lambda function and check execution time'''
@@ -204,6 +261,14 @@ class Benchmark():
             result['error'] = str(error)
 
         return result
+
+    def is_lambda_response_success(self, *, operation, response):
+        '''Validate Lambda response'''
+        if response['StatusCode'] in (200, 202, 204):
+            return True
+
+        else:
+            return False
 
 
 if __name__ == '__main__':
