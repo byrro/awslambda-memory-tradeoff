@@ -152,7 +152,16 @@ class Benchmark():
 
     def restore_original_config(self, original_config: Dict) -> bool:
         '''Restore original Lambda configuration'''
-        return True
+        response, success, error = self.set_new_config(
+            new_memory=original_config['memory'],
+            new_timeout=original_config['timeout'],
+        )
+
+        return {
+            'success': success,
+            'error': error,
+            'response': response,
+        }
 
     def run(self) -> Dict[str, Dict]:
         '''Run benchmarking routine'''
@@ -172,18 +181,17 @@ class Benchmark():
             benchmark_results=self.benchmark_results
         )
 
-        restored, restore_error = self.restore_original_config(
-            config=self.original_config
+        restore_config_result = self.restore_original_config(
+            original_config=self.original_config,
         )
 
-        if not restored:
+        if not restore_config_result['success']:
             error = custom_exc.RestoreOriginalConfigError(
                 f'Cannot restore Lambda ({self.lambda_function}) original '
                 f'configurations: {self.original_config_str}'
             )
 
             logger.warning(error)
-            logger.exception(restore_error)
 
         return self
 
@@ -196,7 +204,10 @@ class Benchmark():
             'errors': [],
         }
 
-        response, success, error = self.set_memory(new_memory=memory)
+        response, success, error = self.set_new_config(
+            new_memory=memory,
+            new_timeout=c.DEFAULT_LAMBDA_TIMEOUT,
+        )
 
         time.sleep(c.SLEEP_AFTER_NEW_MEMORY_SET)
 
@@ -205,8 +216,7 @@ class Benchmark():
             result['errors'].append(str(error))
 
             logger.warning(error)
-            logger.warning('Lambda API response:')
-            print(json.dumps(response))
+            logger.warning(f'Lambda API response: {str(response)}')
 
         while len(result['durations']) < self.test_count:
             with ThreadPoolExecutor(self.max_threads) as executor:
@@ -221,7 +231,7 @@ class Benchmark():
         '''Process results from Lambda benchmarking'''
         pass
 
-    def set_memory(
+    def set_new_config(
             self,
             *,
             new_memory: int,

@@ -39,7 +39,7 @@ class CustomMock():
         return MagicMock(side_effect=KeyError('foobar'))
 
     @staticmethod
-    def set_new_memory():
+    def update_lambda_config():
         '''Mock response from setting new memory'''
         response = {
             'StatusCode': 200,
@@ -229,13 +229,59 @@ class TestBenchmark(unittest.TestCase):
         logger.warning.assert_called()
         logger.exception.assert_called()
 
-    @patch('benchmark.update_lambda_config', new_callable=CustomMock.set_new_memory)  # NOQA
+    @patch('benchmark.update_lambda_config', new_callable=CustomMock.update_lambda_config)  # NOQA
+    @patch('benchmark.logger')
+    def test_restore_original_config(self, logger, update_lambda_config):
+        '''Test restoring original Lambda configurations'''
+        memory = 512
+        timeout = 3000
+
+        result = self.benchmarking.restore_original_config(
+            original_config={
+                'memory': memory,
+                'timeout': timeout,
+            }
+        )
+
+        self.assertTrue(result['success'])
+        self.assertIsNone(result['error'])
+
+        update_lambda_config.assert_called_with(
+            function_name=c.DEFAULT_LAMBDA_FUNCTION,
+            memory_size=memory,
+            timeout=timeout,
+        )
+
+        logger.warning.assert_not_called()
+        logger.exception.assert_not_called()
+
+    @patch('benchmark.update_lambda_config', new_callable=CustomMock.update_lambda_config_fail)  # NOQA
+    @patch('benchmark.logger')
+    def test_restore_original_config_fail(self, logger, update_lambda_config):
+        '''Test restoring original Lambda config when Lambda API fails'''
+        memory = 512
+        timeout = 3000
+
+        result = self.benchmarking.restore_original_config(
+            original_config={
+                'memory': memory,
+                'timeout': timeout,
+            }
+        )
+
+        self.assertFalse(result['success'])
+        self.assertIsNotNone(result['error'])
+
+        logger.warning.assert_called()
+        logger.exception.assert_called()
+
+    @patch('benchmark.update_lambda_config', new_callable=CustomMock.update_lambda_config)  # NOQA
     @patch('benchmark.logger')
     def test_set_new_memory(self, logger, update_lambda_config):
         '''Test setting new memory size to Lambda function'''
         test_memory_size = 512
 
-        response, success, error = self.benchmarking.set_memory(
+        response, success, error = self.benchmarking.set_new_config(
             new_memory=test_memory_size,
         )
 
@@ -259,7 +305,7 @@ class TestBenchmark(unittest.TestCase):
         '''Test setting new memory size when Lambda API fails'''
         test_memory_size = 512
 
-        response, success, error = self.benchmarking.set_memory(
+        response, success, error = self.benchmarking.set_new_config(
             new_memory=test_memory_size,
         )
 
