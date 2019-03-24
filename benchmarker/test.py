@@ -9,8 +9,10 @@ from benchmark import Benchmark
 import constants as c
 import custom_exceptions as custom_exc
 from utils import (
+    get_lambda_config,
     invoke_lambda,
     update_lambda_config,
+    validate_event,
 )
 
 
@@ -20,6 +22,21 @@ COLD_START_TRUE = True
 
 class CustomMock():
     '''Produces custom Mock objects for tests'''
+
+    @staticmethod
+    def get_lambda_config():
+        '''Mock get_lambda_config utility function'''
+        mock_response = {
+            'FunctionName': c.DEFAULT_LAMBDA_FUNCTION,
+            'Timeout': c.DEFAULT_LAMBDA_TIMEOUT,
+            'Memory': c.DEFAULT_MEMORY_SETS[0],
+        }
+        return MagicMock(return_value=mock_response)
+
+    @staticmethod
+    def get_lambda_config_fail():
+        '''Mock failure in the get_lambda_config'''
+        return MagicMock(side_effect=KeyError('foobar'))
 
     @staticmethod
     def set_new_memory():
@@ -72,6 +89,27 @@ class CustomMock():
 class TestLambdaUtils(unittest.TestCase):
     '''Test utility functions'''
 
+    def test_validate_event(self):
+        '''Test validation of Lambda event payload'''
+        args1 = None
+        args2 = {'foo': 'bar'}
+        args3 = {'verbose': None, 'ignore_coldstart': None, 'test_count': None,
+                 'max_threads': None, 'lambda_function': None,
+                 'lambda_event': None, 'memory_sets': None}
+
+        valid1, error1 = validate_event(event=args1)
+        valid2, error2 = validate_event(event=args2)
+        valid3, error3 = validate_event(event=args3)
+
+        self.assertFalse(valid1)
+        self.assertIsNotNone(error1)
+
+        self.assertFalse(valid2)
+        self.assertIsNotNone(error2)
+
+        self.assertTrue(valid3)
+        self.assertIsNone(error3)
+
     @patch('utils.boto3')
     def test_update_function_memory(self, boto3):
         '''Test function that allocate new memory value for Lambda'''
@@ -119,6 +157,23 @@ class TestLambdaUtils(unittest.TestCase):
             Payload=json.dumps(c.DEFAULT_LAMBDA_EVENT),
         )
 
+    @patch('utils.boto3')
+    def test_get_lambda_config(self, boto3):
+        '''Test getting Lambda configuration'''
+        get_lambda_config(
+            function_name=c.DEFAULT_LAMBDA_FUNCTION,
+        )
+
+        boto3.session.Session.assert_called()
+
+        client = boto3.session.Session().client
+        client.assert_called_with('lambda')
+
+        aws_lambda = client()
+        aws_lambda.get_function_configuration.assert_called_with(
+            FunctionName=c.DEFAULT_LAMBDA_FUNCTION,
+        )
+
 
 class TestBenchmark(unittest.TestCase):
     '''Test Benchmark class methods'''
@@ -137,6 +192,42 @@ class TestBenchmark(unittest.TestCase):
 
         expected_str = 'memory: 1024, timeout: 60000'
         self.assertEqual(self.benchmarking.original_config_str, expected_str)
+
+    @patch('benchmark.get_lambda_config', new_callable=CustomMock.get_lambda_config)  # NOQA
+    @patch('benchmark.logger')
+    def test_store_original_config(self, logger, get_lambda_config):
+        '''Test storing original Lambda configuration parameters'''
+        result = self.benchmarking.store_original_config()
+
+        get_lambda_config.assert_called_with(
+            function_name=c.DEFAULT_LAMBDA_FUNCTION,
+        )
+
+        self.assertIsNone(result['error'])
+        self.assertEqual(
+            self.benchmarking.original_config['memory'],
+            c.DEFAULT_MEMORY_SETS[0],
+        )
+        self.assertEqual(
+            self.benchmarking.original_config['timeout'],
+            c.DEFAULT_LAMBDA_TIMEOUT,
+        )
+
+        logger.warning.assert_not_called()
+        logger.exception.assert_not_called()
+
+    @patch('benchmark.get_lambda_config', new_callable=CustomMock.get_lambda_config_fail)  # NOQA
+    @patch('benchmark.logger')
+    def test_store_original_config_fail(self, logger, get_lambda_config):
+        '''Test storing original configuration when get_lambda_config fails'''
+        result = self.benchmarking.store_original_config()
+
+        self.assertIsNotNone(result['error'])
+        self.assertIsNone(result['memory'])
+        self.assertIsNone(result['timeout'])
+
+        logger.warning.assert_called()
+        logger.exception.assert_called()
 
     @patch('benchmark.update_lambda_config', new_callable=CustomMock.set_new_memory)  # NOQA
     @patch('benchmark.logger')

@@ -11,6 +11,11 @@ class GetOriginalConfigError(Exception):
     pass
 
 
+class StoreOriginalConfigError(Exception):
+    '''Error locally storing original Lambda configuration'''
+    pass
+
+
 class RestoreOriginalConfigError(Exception):
     '''Error restoring original Lambda configuration'''
     pass

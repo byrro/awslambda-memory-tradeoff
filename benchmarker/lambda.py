@@ -1,6 +1,10 @@
 '''AWS Lambda to benchmark performance with different memory allocations'''
+import json
 from typing import Dict
 from benchmark import Benchmark
+from utils import (
+    validate_event,
+)
 
 
 def handler(event: Dict, context: Dict) -> Dict:
@@ -18,6 +22,17 @@ def handler(event: Dict, context: Dict) -> Dict:
     :memory_sets: (list) list of memory allocations to benchmark
         AWS Lambda accepts memory from 128 to 3008 Mb in increments of 128 Mb
     '''
+    valid, error = validate_event(event=event)
+
+    if not valid:
+        return {
+            'success': False,
+            'error': error,
+        }
+
+    # Log event payload for debugging and security purposes
+    print(json.dumps(event))
+
     benchmarking = Benchmark(**event)
 
     results = benchmarking.run().results

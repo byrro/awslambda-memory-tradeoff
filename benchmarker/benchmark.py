@@ -12,6 +12,7 @@ from typing import (
 import constants as c
 import custom_exceptions as custom_exc
 from utils import (
+    get_lambda_config,
     invoke_lambda,
     logger,
     update_lambda_config,
@@ -98,9 +99,56 @@ class Benchmark():
 
         return result
 
-    def store_original_config(self) -> bool:
+    def store_original_config(self) -> tuple:
         '''Get original Lambda configuration to restore after benchmarking'''
-        return True
+        result = {
+            'memory': None,
+            'timeout': None,
+            'error': None,
+        }
+
+        try:
+            config = get_lambda_config(
+                function_name=self.lambda_function,
+            )
+
+            success = self.is_lambda_response_success(
+                operation='get_lambda_config',
+                response=config,
+            )
+
+            if not success:
+                error = custom_exc.StoreOriginalConfigError(
+                    'Invalid configuration parameters returned for Lambda '
+                    f'({self.lambda_function})'
+                )
+
+                result['error'] = error
+
+                logger.warning(error)
+                logger.warning(f'Lambda API response: {str(config)}')
+
+            else:
+                self.set_original(
+                    memory=config['Memory'],
+                    timeout=config['Timeout'],
+                )
+
+                result['memory'] = config['Memory']
+                result['timeout'] = config['Timeout']
+
+        except Exception as exc:
+            error = custom_exc.StoreOriginalConfigError(
+                'Could not get original configuration for Lambda '
+                f'({self.lambda_function})'
+            )
+
+            result['error'] = error
+
+            logger.warning(error)
+            logger.exception(exc)
+
+        return result
 
     def restore_original_config(self, original_config: Dict) -> bool:
         '''Restore original Lambda configuration'''
@@ -111,7 +159,10 @@ class Benchmark():
         self.results = {}
         self.benchmark_results = []
 
-        self.store_original_config()
+        store_config_result = self.store_original_config()
+
+        if store_config_result['error']:
+            raise store_config_result['error']
 
         for memory in self.memory_sets:
             benchmark_result = self.benchmark_memory(memory=memory)
@@ -264,7 +315,17 @@ class Benchmark():
 
     def is_lambda_response_success(self, *, operation, response):
         '''Validate Lambda response'''
-        if response['StatusCode'] in (200, 202, 204):
+        if type(response) is not dict:
+            return False
+
+        elif operation == 'get_lambda_config':
+            if 'Memory' in response and 'Timeout' in response:
+                return True
+
+            else:
+                return False
+
+        elif response['StatusCode'] in (200, 202, 204):
             return True
 
         else:

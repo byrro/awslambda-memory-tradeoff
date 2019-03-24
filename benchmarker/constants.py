@@ -1,6 +1,15 @@
 '''Constant values for memory benchmark Lambda'''
 
 
+VALID_EVENT_ARGS = [
+    'verbose',
+    'ignore_coldstart',
+    'test_count',
+    'max_threads',
+    'lambda_function',
+    'lambda_event',
+    'memory_sets',
+]
 IGNORE_COLDSTART = True
 DEFAULT_TEST_COUNT = 50
 DEFAULT_MAX_THREADS = 10

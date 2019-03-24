@@ -5,10 +5,26 @@ from typing import (
     Dict,
 )
 import boto3
+import constants as c
 
 
 logger = logging.getLogger()
 logger.setLevel(logging.WARNING)
+
+
+def validate_event(*, event):
+    '''Validate Lambda event payload input'''
+    error = None
+
+    if type(event) is not dict:
+        error = f'Event payload input must be a dict, got {type(event)}'
+
+    elif not all(key in c.VALID_EVENT_ARGS for key in event.keys()):
+        error = f"Invalid event key, valid are {', '.join(c.VALID_EVENT_ARGS)}"
+
+    valid = True if error is None else False
+
+    return valid, error
 
 
 def lambda_client():
@@ -79,4 +95,8 @@ def get_lambda_config(*, function_name):
     '''Get current configuration parameters for a given Lambda function'''
     aws_lambda = lambda_client()
 
-    
+    response = aws_lambda.get_function_configuration(
+        FunctionName=function_name,
+    )
+
+    return response
