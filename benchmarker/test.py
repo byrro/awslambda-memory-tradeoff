@@ -1,6 +1,8 @@
 '''Test cases for benchmark Lambda'''
 import json
-from random import randint
+from random import (
+    randint,
+)
 import threading
 import unittest
 from unittest.mock import (
@@ -591,23 +593,13 @@ class TestLambdaHandler(unittest.TestCase):
         self.params = {
             'verbose': False,
             'ignore_coldstart': True,
-            'test_count': c.DEFAULT_TEST_COUNT,
-            'max_threads': c.DEFAULT_MAX_THREADS,
+            'test_count': 2,
+            'max_threads': 2,
             'lambda_function': c.DEFAULT_LAMBDA_FUNCTION,
             'lambda_event': c.DEFAULT_LAMBDA_EVENT,
-            'memory_sets': c.DEFAULT_MEMORY_SETS,
+            'memory_sets': [128, 256],
             'timeout': c.DEFAULT_LAMBDA_TIMEOUT,
         }
-
-        self.lambda_states = reset_lambda_states(
-            max_threads=self.params['max_threads'],
-            test_count=self.params['test_count'],
-        )
-
-        self.remaining_times = reset_lambda_remaining_time(
-            invocations=len(self.lambda_states),
-            timeout=self.params['timeout'],
-        )
 
         self.benchmarking = Benchmark(**self.params)  # Use default arguments
 
@@ -663,27 +655,12 @@ class TestLambdaHandler(unittest.TestCase):
         self.assertIn(
             'CustomBenchmarkException: custom_foobar', response['errors'])
 
-    @patch('benchmark.get_lambda_config', new_callable=CustomMock.get_lambda_config)  # NOQA
-    @patch('benchmark.update_lambda_config', new_callable=CustomMock.update_lambda_config)  # NOQA
-    @patch('benchmark.invoke_lambda', new_callable=CustomMock.invoke_lambda_get_durations)  # NOQA
-    @patch('benchmark.logger')
-    @patch('lambda_function.logger')
-    def test_full_cycle(
-            self,
-            handler_logger,
-            benchmark_logger,
-            invoke_lambda,
-            update_lambda_config,
-            get_lambda_config,
-            ):
-        '''Test full Lambda handler execution cycle'''
-        pass
-
 
 def reset_lambda_states(*, max_threads: int, test_count: int) -> list:
     global LAMBDA_STATE
 
-    lambda_states = [True for i in range(0, max_threads)] + \
+    lambda_states = \
+        [True for i in range(0, max_threads)] + \
         [False for i in range(0, test_count)]
 
     LAMBDA_STATE = iter(lambda_states)
