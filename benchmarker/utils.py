@@ -1,11 +1,13 @@
 '''Utility functions for the memory benchmark Lambda'''
 import json
 import logging
+import math
 from typing import (
     Dict,
 )
 import boto3
 import constants as c
+import custom_exceptions as custom_exc
 
 
 logger = logging.getLogger()
@@ -100,3 +102,15 @@ def get_lambda_config(*, function_name):
     )
 
     return response
+
+
+def lambda_execution_cost(*, memory: int, duration: int) -> float:
+    '''Calculate Lambda execution cost'''
+    cost_per_100ms = c.LAMBDA_COST_BY_MEMORY.get(memory)
+
+    if not cost_per_100ms:
+        raise custom_exc.CalculateLambdaExecutionCostError(
+            f'Cost/100ms not found for memory size ({memory})'
+        )
+
+    return round(math.ceil(duration/100) * cost_per_100ms, 6)

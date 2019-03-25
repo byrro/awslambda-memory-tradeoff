@@ -13,6 +13,7 @@ import custom_exceptions as custom_exc
 from utils import (
     get_lambda_config,
     invoke_lambda,
+    lambda_execution_cost,
     update_lambda_config,
     validate_event,
 )
@@ -198,6 +199,34 @@ class TestLambdaUtils(unittest.TestCase):
         aws_lambda.get_function_configuration.assert_called_with(
             FunctionName=c.DEFAULT_LAMBDA_FUNCTION,
         )
+
+    def test_lambda_execution_cost(self):
+        '''Test calculation of Lambda execution cost'''
+        test_sets = [
+            {
+                'memory': 512,
+                'duration': 98342,
+                'expected_cost': round(0.000820656, 6),
+            },
+            {
+                'memory': 1600,
+                'duration': 536873,
+                'expected_cost': round(0.013986245, 6),
+            },
+            {
+                'memory': 3008,
+                'duration': 49856,
+                'expected_cost': round(0.002443603, 6),
+            },
+        ]
+
+        for test in test_sets:
+            cost = lambda_execution_cost(
+                memory=test['memory'],
+                duration=test['duration'],
+            )
+
+            self.assertEqual(cost, test['expected_cost'])
 
 
 class TestBenchmark(unittest.TestCase):
@@ -444,6 +473,89 @@ class TestBenchmark(unittest.TestCase):
         for duration in durations:
             remaining_time = c.DEFAULT_LAMBDA_TIMEOUT - duration
             self.assertIn(remaining_time, remaining_times)
+
+    @patch('benchmark.logger')
+    def test_process_benchmark_results(self, logger):
+        '''Test processing of benchmark results'''
+        benchmark_results = [
+            {
+                'memory': 128,
+                'success': True,
+                'errors': [],
+                'average_duration': 900000,
+                'durations': [900000, 900000, 900000, 900000, 900000],
+            },
+            {
+                'memory': 512,
+                'success': True,
+                'errors': [],
+                'average_duration': 217850,
+                'durations': [185905, 256053, 215803, 260124, 171366],
+            },
+            {
+                'memory': 1024,
+                'success': False,
+                'errors': [KeyError('foobar')],
+                'average_duration': 147595,
+                'durations': [36306, 195390, 230686, 66158, 209433],
+            },
+            {
+                'memory': 1025,  # Invalid Lambda memory on purpose
+                'success': True,
+                'errors': [],
+                'average_duration': 147595,
+                'durations': [36306, 195390, 230686, 66158, 209433],
+            },
+            {
+                'memory': 1536,
+                'success': True,
+                'errors': [],
+                'average_duration': 190921,
+                'durations': [297430, 75243, 100955, 181280, 299699],
+            },
+            {
+                'memory': 3008,
+                'success': True,
+                'errors': [],
+                'average_duration': 9280,
+                'durations': [20913, 11826, 9909, 1170, 2581],
+            },
+        ]
+
+        expected_costs = {
+            128: round(0.001872, 6),
+            512: round(0.001817, 6),
+            1536: round(0.004777, 6),
+            3008: round(0.000455, 6),
+        }
+
+        results = self.benchmarking.process_benchmark_results(
+            results=benchmark_results,
+        )
+
+        # Check cost ranking
+        self.assertEqual(results['ranking']['cost'][0]['memory'], 3008)
+        self.assertEqual(results['ranking']['cost'][1]['memory'], 512)
+        self.assertEqual(results['ranking']['cost'][2]['memory'], 128)
+        self.assertEqual(results['ranking']['cost'][3]['memory'], 1536)
+
+        # Check speed ranking
+        self.assertEqual(results['ranking']['duration'][0]['memory'], 3008)
+        self.assertEqual(results['ranking']['duration'][1]['memory'], 1536)
+        self.assertEqual(results['ranking']['duration'][2]['memory'], 512)
+        self.assertEqual(results['ranking']['duration'][3]['memory'], 128)
+
+        for log in results['logs']:
+            if log['memory'] == 1024 or log['memory'] == 1025:
+                self.assertFalse(log['success'])
+                self.assertTrue(len(log['errors']) > 0)
+
+            else:
+                expected_cost = expected_costs[log['memory']]
+                self.assertEqual(log['execution_cost'], expected_cost)
+
+        logger.warning.assert_called()
+        logger.exception.assert_called()
 
 
 def reset_lambda_states(*, max_threads: int, test_count: int) -> list:

@@ -34,3 +34,8 @@ class InvokeLambdaError(Exception):
 class LambdaPayloadError(Exception):
     '''Error on Lambda response payload'''
     pass
+
+
+class CalculateLambdaExecutionCostError(Exception):
+    '''Error on Lambda cost calculation'''
+    pass

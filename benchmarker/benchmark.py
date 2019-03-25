@@ -12,6 +12,7 @@ import custom_exceptions as custom_exc
 from utils import (
     get_lambda_config,
     invoke_lambda,
+    lambda_execution_cost,
     logger,
     update_lambda_config,
 )
@@ -42,9 +43,10 @@ class Benchmark():
         self.memory_sets = memory_sets
 
         # Internal attributes
-        self._results = {}
-        self._benchmark_results = []
-        self._original_config = {
+        self.results = {}
+        self.benchmark_results = []
+        self.public_errors = []
+        self.original_config = {
             'memory': None,
             'timeout': None,
         }
@@ -59,14 +61,6 @@ class Benchmark():
             f'lambda_event: {json.dumps(self.lambda_event)}, '
             f'memory_sets: {json.dumps(self.memory_sets)}'
         ])
-
-    @property
-    def results(self):
-        return self._results
-
-    @property
-    def original_config(self):
-        return self._original_config
 
     @property
     def original_config_str(self):
@@ -99,7 +93,7 @@ class Benchmark():
         result = {'memory': False, 'timeout': False}
 
         if type(memory) is int:
-            self._original_config['memory'] = memory
+            self.original_config['memory'] = memory
             result['memory'] = True
 
         elif type(memory) is not None:
@@ -109,7 +103,7 @@ class Benchmark():
             )
 
         if type(timeout) is int:
-            self._original_config['timeout'] = timeout
+            self.original_config['timeout'] = timeout
             result['timeout'] = True
 
         elif type(timeout) is not None:
@@ -122,6 +116,8 @@ class Benchmark():
 
     def store_original_config(self) -> tuple:
         '''Get original Lambda configuration to restore after benchmarking'''
+        self.verbose_log('Storing original Lambda configuration parameters')
+
         result = {
             'memory': None,
             'timeout': None,
@@ -173,6 +169,8 @@ class Benchmark():
 
     def restore_original_config(self, original_config: Dict) -> bool:
         '''Restore original Lambda configuration'''
+        self.verbose_log('Restoring original Lambda configuration parameters')
+
         response, success, error = self.set_new_config(
             new_memory=original_config['memory'],
             new_timeout=original_config['timeout'],
@@ -184,34 +182,37 @@ class Benchmark():
             'response': response,
         }
 
+    def append_public_error(self, *, error):
+        '''Append an error to public_errors attribute'''
+        if type(error) is list:
+            for err in error:
+                self.append_public_error(error=err)
+
+        else:
+            self.public_errors.append(f'{type(error).__name__}: {str(error)}')
+
     def run(self) -> Dict[str, Dict]:
         '''Run benchmarking routine'''
         self.verbose_log('Started running benchmarking')
 
-        self.results = {}
+        # Reset results attributes
+        self.results = []
         self.benchmark_results = []
-
-        self.verbose_log('Storing original Lambda configuration parameters')
 
         store_config_result = self.store_original_config()
 
         if store_config_result['error']:
             raise store_config_result['error']
 
+        # Cannot run this in parallel because we have only one Lambda to test
+        # To run parallel memory benchmarks, we'd need to deploy the same code
+        # in multiple Lambdas; within each benchmark we use concurrent threads
         for memory in self.memory_sets:
-            self.verbose_log(f'  START benchmarking memory: {memory}')
-
             self.benchmark_results.append(self.benchmark_memory(memory=memory))
 
-            self.verbose_log(f'  DONE benchmarking memory: {memory}')
-
-        self.verbose_log('Processing benchmarking results')
-
-        self.process_benchmark_results(
-            benchmark_results=self.benchmark_results
+        self.results = self.process_benchmark_results(
+            results=self.benchmark_results,
         )
-
-        self.verbose_log('Restoring original Lambda configuration parameters')
 
         restore_config_result = self.restore_original_config(
             original_config=self.original_config,
@@ -223,6 +224,8 @@ class Benchmark():
                 f'configurations: {self.original_config_str}'
             )
 
+            self.append_public_error(error=error)
+
             logger.warning(error)
 
         self.verbose_log('Ended running benchmarking')
@@ -231,14 +234,15 @@ class Benchmark():
 
     def benchmark_memory(self, *, memory: int) -> Dict:
         '''Benchmark a given memory size'''
+        self.verbose_log(f'  START benchmarking memory: {memory}')
+
         result = {
             'memory': memory,
             'success': True,
             'durations': [],
+            'average_duration': None,
             'errors': [],
         }
-
-        self.verbose_log('    Updating Lambda memory')
 
         response, success, error = self.set_new_config(
             new_memory=memory,
@@ -254,11 +258,14 @@ class Benchmark():
 
             return result
 
-        self.verbose_log('    Lambda memory updated')
-
         time.sleep(c.SLEEP_AFTER_NEW_MEMORY_SET)
 
         result['durations'] = self.get_benchmark_durations()
+
+        result['average_duration'] = \
+            round(sum(result['durations']) / len(result['durations']))
+
+        self.verbose_log(f'  DONE benchmarking memory: {memory}')
 
         return result
 
@@ -299,10 +306,6 @@ class Benchmark():
                 runs += 1
 
         return durations
-
-    def process_benchmark_results(self, *, benchmark_results) -> Dict:
-        '''Process results from Lambda benchmarking'''
-        pass
 
     def set_new_config(
             self,
@@ -413,6 +416,88 @@ class Benchmark():
 
         else:
             return False
+
+    def process_benchmark_results(self, *, results: Dict) -> Dict:
+        '''Process benchmark results'''
+        processed = {
+            'ranking': {
+                'cost': [],
+                'duration': [],
+            },
+            'logs': [],
+            'notes': [
+                'Lambda execution costs are in US$, following pricing page '
+                'as of March 25, 2019 (https://aws.amazon.com/lambda/pricing)',
+                'Lambda duration times are in milliseconds',
+            ]
+        }
+
+        for benchmark in results:
+            if not benchmark['success']:
+                processed['logs'].append({
+                    'memory': benchmark['memory'],
+                    'success': False,
+                    'errors': [str(error) for error in benchmark['errors']],
+                })
+                self.append_public_error(error=benchmark['errors'])
+
+                continue
+
+            # Calculate cost of execution for ranking
+            try:
+                execution_cost = lambda_execution_cost(
+                    memory=benchmark['memory'],
+                    duration=benchmark['average_duration'],
+                )
+
+            except Exception as error:
+                logger.warning(error)
+                logger.exception(error)
+                self.append_public_error(error=error)
+
+                processed['logs'].append({
+                    'memory': benchmark['memory'],
+                    'success': False,
+                    'errors': [str(error)],
+                })
+
+                continue
+
+            # Populate financial performance ranking
+            processed['ranking']['cost'].append({
+                'memory': benchmark['memory'],
+                'cost': execution_cost,
+            })
+
+            # Populate speed performance ranking
+            processed['ranking']['duration'].append({
+                'memory': benchmark['memory'],
+                'duration': benchmark['average_duration'],
+            })
+
+            # Populate benchmark details for debugging/verification purposes
+            processed['logs'].append({
+                'memory': benchmark['memory'],
+                'succcess': False,
+                'duration': {
+                    'average': benchmark['average_duration'],
+                    'all_invocations': benchmark['durations'],
+                },
+                'execution_cost': execution_cost,
+            })
+
+        # Order rankings by best performers
+        processed['ranking']['cost'] = sorted(
+            processed['ranking']['cost'],
+            key=lambda k: k['cost'],
+        )
+
+        processed['ranking']['duration'] = sorted(
+            processed['ranking']['duration'],
+            key=lambda k: k['duration'],
+        )
+
+        return processed
 
 
 if __name__ == '__main__':
