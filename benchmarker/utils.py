@@ -2,6 +2,7 @@
 import json
 import logging
 import math
+import pprint
 from typing import (
     Dict,
 )
@@ -120,3 +121,9 @@ def lambda_execution_cost(*, memory: int, duration: int) -> float:
         )
 
     return round(math.ceil(duration/100) * cost_per_100ms, 6)
+
+
+def pretty_print(data: str, indent: int = 4):
+    '''Pretty printer'''
+    pp = pprint.PrettyPrinter(indent=indent)
+    pp.pprint(data)
