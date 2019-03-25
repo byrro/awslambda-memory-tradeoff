@@ -1,5 +1,7 @@
 '''Test cases for benchmark Lambda'''
 import json
+from random import randint
+import threading
 import unittest
 from unittest.mock import (
     MagicMock,
@@ -18,6 +20,8 @@ from utils import (
 
 TEST_REMAINING_TIME = 1000
 COLD_START_TRUE = True
+LAMBDA_STATE = iter([])
+LAMBDA_REMAINING_TIME = iter([])
 
 
 class CustomMock():
@@ -84,6 +88,27 @@ class CustomMock():
             'Payload': {},
         }
         return MagicMock(return_value=response)
+
+    @staticmethod
+    def invoke_lambda_get_durations(*args, **kwargs):
+        '''Mock response from invoke_lambda for time checks'''
+        # Iterator is not atomic, need the thread lock because this object will
+        # be called by multiple threads concurrently
+        with threading.Lock():
+            global LAMBDA_REMAINING_TIME
+            global LAMBDA_STATE
+
+            remaining_time = next(LAMBDA_REMAINING_TIME)
+            cold_start = next(LAMBDA_STATE)
+
+        mock_response = {
+            'Payload': {
+                'remaining_time': remaining_time,
+                'cold_start': cold_start,
+            }
+        }
+
+        return mock_response
 
 
 class TestLambdaUtils(unittest.TestCase):
@@ -340,7 +365,7 @@ class TestBenchmark(unittest.TestCase):
     @patch('benchmark.logger')
     def test_check_execution_time(self, logger, invoke_lambda):
         '''Test invocation of a Lambda function to check execution time'''
-        result = self.benchmarking.check_execution_time()
+        result = self.benchmarking.get_execution_time()
 
         invoke_lambda.assert_called_with(
             function_name=c.DEFAULT_LAMBDA_FUNCTION,
@@ -360,7 +385,7 @@ class TestBenchmark(unittest.TestCase):
     @patch('benchmark.logger')
     def test_check_execution_fail(self, logger, invoke_lambda):
         '''Test checking execution time when an exception is raised'''
-        response = self.benchmarking.check_execution_time()
+        response = self.benchmarking.get_execution_time()
 
         self.assertFalse(response['success'])
         self.assertIsNone(response['duration'])
@@ -374,7 +399,7 @@ class TestBenchmark(unittest.TestCase):
     @patch('benchmark.logger')
     def test_check_execution_payload_error(self, logger, invoke_lambda):
         '''Test checking execution time when payload contains an error'''
-        response = self.benchmarking.check_execution_time()
+        response = self.benchmarking.get_execution_time()
 
         self.assertFalse(response['success'])
         self.assertIsNone(response['duration'])
@@ -387,7 +412,7 @@ class TestBenchmark(unittest.TestCase):
     @patch('benchmark.logger')
     def test_check_execution_miss_remaining_time(self, logger, invoke_lambda):
         '''Test checking execution time without remaining time in Payload'''
-        response = self.benchmarking.check_execution_time()
+        response = self.benchmarking.get_execution_time()
 
         self.assertFalse(response['success'])
         self.assertIsNone(response['duration'])
@@ -395,6 +420,52 @@ class TestBenchmark(unittest.TestCase):
         self.assertEqual(response['error'], 'No Integer "remaining_time" in Lambda Payload')  # NOQA
 
         logger.warning.assert_called()
+
+    @patch('benchmark.invoke_lambda', new=CustomMock.invoke_lambda_get_durations)  # NOQA
+    def test_get_benchmark_durations(self):
+        '''Test running benchmark routine for a given memory size'''
+        lambda_states = reset_lambda_states(
+            max_threads=c.DEFAULT_MAX_THREADS,
+            test_count=c.DEFAULT_TEST_COUNT,
+        )
+
+        remaining_times = reset_lambda_remaining_time(
+            invocations=len(lambda_states),
+            timeout=c.DEFAULT_LAMBDA_TIMEOUT,
+        )
+
+        self.assertTrue(len(lambda_states) == len(remaining_times))
+
+        durations = self.benchmarking.get_benchmark_durations()
+
+        self.assertEqual(len(durations), c.DEFAULT_TEST_COUNT)
+
+        # Check if all durations match remainingtimes provided
+        for duration in durations:
+            remaining_time = c.DEFAULT_LAMBDA_TIMEOUT - duration
+            self.assertIn(remaining_time, remaining_times)
+
+
+def reset_lambda_states(*, max_threads: int, test_count: int) -> list:
+    global LAMBDA_STATE
+
+    lambda_states = [True for i in range(0, max_threads)] + \
+        [False for i in range(0, test_count)]
+
+    LAMBDA_STATE = iter(lambda_states)
+
+    return lambda_states
+
+
+def reset_lambda_remaining_time(*, invocations: int, timeout: int) -> list:
+    '''Reset Lambda remaining times'''
+    global LAMBDA_REMAINING_TIME
+
+    remaining_time = [randint(1, timeout) for i in range(0, invocations)]
+
+    LAMBDA_REMAINING_TIME = iter(remaining_time)
+
+    return remaining_time
 
 
 if __name__ == '__main__':

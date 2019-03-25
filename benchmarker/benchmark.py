@@ -1,7 +1,5 @@
 '''Routine to benchmark Lambda performance with different memory allocations'''
-from concurrent.futures import (
-    ThreadPoolExecutor,
-)
+import concurrent.futures
 import json
 import time
 from typing import (
@@ -25,7 +23,7 @@ class Benchmark():
     def __init__(
             self,
             *,
-            verbose: bool = True,
+            verbose: bool = False,
             ignore_coldstart: bool = c.IGNORE_COLDSTART,
             test_count: int = c.DEFAULT_TEST_COUNT,
             max_threads: int = c.DEFAULT_MAX_THREADS,
@@ -51,6 +49,17 @@ class Benchmark():
             'timeout': None,
         }
 
+        self.verbose_log([
+            'Initialized Benchmark with the following params:'
+            f'verbose: {self.verbose}, '
+            f'ignore_coldstart: {self.ignore_coldstart}, '
+            f'test_count: {self.test_count}, ',
+            f'max_threads: {self.max_threads}, ',
+            f'lambda_function: {self.lambda_function}, '
+            f'lambda_event: {json.dumps(self.lambda_event)}, '
+            f'memory_sets: {json.dumps(self.memory_sets)}'
+        ])
+
     @property
     def results(self):
         return self._results
@@ -67,6 +76,18 @@ class Benchmark():
             config_options.append(f'{key}: {str(val)}')
 
         return ', '.join(config_options)
+
+    def verbose_log(self, log):
+        '''Print logs in verbose mode'''
+        if not self.verbose:
+            return None
+
+        if type(log) is str:
+            print(log)
+
+        elif type(log) is list:
+            for item in log:
+                self.verbose_log(item)
 
     def set_original(
             self,
@@ -165,8 +186,12 @@ class Benchmark():
 
     def run(self) -> Dict[str, Dict]:
         '''Run benchmarking routine'''
+        self.verbose_log('Started running benchmarking')
+
         self.results = {}
         self.benchmark_results = []
+
+        self.verbose_log('Storing original Lambda configuration parameters')
 
         store_config_result = self.store_original_config()
 
@@ -174,12 +199,19 @@ class Benchmark():
             raise store_config_result['error']
 
         for memory in self.memory_sets:
-            benchmark_result = self.benchmark_memory(memory=memory)
-            self.benchmark_results.append(benchmark_result)
+            self.verbose_log(f'  START benchmarking memory: {memory}')
+
+            self.benchmark_results.append(self.benchmark_memory(memory=memory))
+
+            self.verbose_log(f'  DONE benchmarking memory: {memory}')
+
+        self.verbose_log('Processing benchmarking results')
 
         self.process_benchmark_results(
             benchmark_results=self.benchmark_results
         )
+
+        self.verbose_log('Restoring original Lambda configuration parameters')
 
         restore_config_result = self.restore_original_config(
             original_config=self.original_config,
@@ -193,23 +225,25 @@ class Benchmark():
 
             logger.warning(error)
 
+        self.verbose_log('Ended running benchmarking')
+
         return self
 
     def benchmark_memory(self, *, memory: int) -> Dict:
         '''Benchmark a given memory size'''
         result = {
             'memory': memory,
-            'success': None,
+            'success': True,
             'durations': [],
             'errors': [],
         }
+
+        self.verbose_log('    Updating Lambda memory')
 
         response, success, error = self.set_new_config(
             new_memory=memory,
             new_timeout=c.DEFAULT_LAMBDA_TIMEOUT,
         )
-
-        time.sleep(c.SLEEP_AFTER_NEW_MEMORY_SET)
 
         if not success:
             result['success'] = False
@@ -218,14 +252,53 @@ class Benchmark():
             logger.warning(error)
             logger.warning(f'Lambda API response: {str(response)}')
 
-        while len(result['durations']) < self.test_count:
-            with ThreadPoolExecutor(self.max_threads) as executor:
-                result = executor.map(self.check_execution_time)
+            return result
 
-                if result['success'] and not result['cold_start']:
-                    result['durations'].extend(result['duration'])
+        self.verbose_log('    Lambda memory updated')
+
+        time.sleep(c.SLEEP_AFTER_NEW_MEMORY_SET)
+
+        result['durations'] = self.get_benchmark_durations()
 
         return result
+
+    def get_benchmark_durations(self) -> list:
+        '''Run benchmarking of a given memory size'''
+        durations = []
+        runs = 0
+        max_runs = self.test_count / self.max_threads + 5
+
+        while len(durations) < self.test_count:
+            pending = self.test_count - len(durations)
+            threads = min(self.max_threads, pending)
+
+            self.verbose_log(
+                f'    Pending checks: {pending}, threads: {threads}')
+
+            with concurrent.futures.ThreadPoolExecutor(threads) as executor:
+                invoke_futures = [
+                    executor.submit(self.get_execution_time)
+                    for i in range(0, threads)
+                ]
+
+                for future in concurrent.futures.as_completed(invoke_futures):
+                    invocation = future.result()
+
+                    if invocation['success'] and not invocation['cold_start']:
+                        durations.append(invocation['duration'])
+
+                durations_count = len(durations)
+
+                self.verbose_log(
+                    f'    Durations count: {durations_count}')
+
+            # Avoid falling in an infinite loop
+            if runs >= max_runs:
+                break
+            else:
+                runs += 1
+
+        return durations
 
     def process_benchmark_results(self, *, benchmark_results) -> Dict:
         '''Process results from Lambda benchmarking'''
@@ -265,7 +338,7 @@ class Benchmark():
 
         return response, success, error
 
-    def check_execution_time(self) -> Dict:
+    def get_execution_time(self) -> Dict:
         '''Invoke the Lambda function and check execution time'''
         result = {
             'success': False,
