@@ -31,6 +31,7 @@ class Benchmark():
             lambda_function: str = c.DEFAULT_LAMBDA_FUNCTION,
             lambda_event: Dict = c.DEFAULT_LAMBDA_EVENT,
             memory_sets: List[int] = c.DEFAULT_MEMORY_SETS,
+            timeout: int = c.DEFAULT_LAMBDA_TIMEOUT,
             **kwargs,
             ):
         # Public attributes
@@ -41,6 +42,7 @@ class Benchmark():
         self.lambda_function = lambda_function
         self.lambda_event = lambda_event
         self.memory_sets = memory_sets
+        self.timeout = timeout
 
         # Internal attributes
         self.results = {}
@@ -230,7 +232,7 @@ class Benchmark():
 
         self.verbose_log('Ended running benchmarking')
 
-        return self
+        return self.results
 
     def benchmark_memory(self, *, memory: int) -> Dict:
         '''Benchmark a given memory size'''
@@ -246,7 +248,7 @@ class Benchmark():
 
         response, success, error = self.set_new_config(
             new_memory=memory,
-            new_timeout=c.DEFAULT_LAMBDA_TIMEOUT,
+            new_timeout=self.timeout,
         )
 
         if not success:
@@ -311,7 +313,7 @@ class Benchmark():
             self,
             *,
             new_memory: int,
-            new_timeout: int = c.DEFAULT_LAMBDA_TIMEOUT
+            new_timeout: int,
             ) -> bool:
         '''Set new memory for the Lambda'''
         response = None
@@ -380,7 +382,7 @@ class Benchmark():
             else:
                 result['success'] = True
 
-                result['duration'] = c.DEFAULT_LAMBDA_TIMEOUT - \
+                result['duration'] = self.timeout - \
                     response['Payload']['remaining_time']
 
                 result['cold_start'] = \

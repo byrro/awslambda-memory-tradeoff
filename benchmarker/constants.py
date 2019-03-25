@@ -9,6 +9,7 @@ VALID_EVENT_ARGS = [
     'lambda_function',
     'lambda_event',
     'memory_sets',
+    'timeout',
 ]
 IGNORE_COLDSTART = True
 DEFAULT_TEST_COUNT = 50
@@ -77,4 +78,8 @@ LAMBDA_COST_BY_MEMORY = {
     2880: 0.000004688,
     2944: 0.000004793,
     3008: 0.000004897,
+}
+PAYLOAD_PRINT_MSG = {
+    'event': 'EVENT PAYLOAD:',
+    'response': 'RESPONSE OBJECT:',
 }

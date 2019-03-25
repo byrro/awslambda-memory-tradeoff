@@ -29,6 +29,12 @@ def validate_event(*, event):
     return valid, error
 
 
+def print_payload(*, payload_type: str, payload_obj: Dict):
+    '''Print payload objects for debugging purposes'''
+    print(c.PAYLOAD_PRINT_MSG.get(payload_type, f'PAYLOAD {payload_type}:'))
+    print(json.dumps(payload_obj))
+
+
 def lambda_client():
     '''Instantiate a thread-safe Lambda client'''
     session = boto3.session.Session()

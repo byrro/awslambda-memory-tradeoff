@@ -4,12 +4,14 @@ from random import randint
 import threading
 import unittest
 from unittest.mock import (
+    call,
     MagicMock,
     patch,
 )
 from benchmark import Benchmark
 import constants as c
 import custom_exceptions as custom_exc
+from lambda_function import handler as lambda_handler
 from utils import (
     get_lambda_config,
     invoke_lambda,
@@ -110,6 +112,17 @@ class CustomMock():
         }
 
         return mock_response
+
+    @staticmethod
+    def benchmark_fail_regular(*args, **kwargs):
+        '''Mock Benchmark class with Python exception'''
+        return MagicMock(side_effect=KeyError('foobar'))
+
+    @staticmethod
+    def benchmark_fail_custom(*args, **kwargs):
+        '''Mock Benchmark class with Custom exception'''
+        return MagicMock(
+            side_effect=custom_exc.CustomBenchmarkException('custom_foobar'))
 
 
 class TestLambdaUtils(unittest.TestCase):
@@ -233,7 +246,18 @@ class TestBenchmark(unittest.TestCase):
     '''Test Benchmark class methods'''
 
     def setUp(self):
-        self.benchmarking = Benchmark()  # Use default arguments
+        self.params = {
+            'verbose': False,
+            'ignore_coldstart': True,
+            'test_count': c.DEFAULT_TEST_COUNT,
+            'max_threads': c.DEFAULT_MAX_THREADS,
+            'lambda_function': c.DEFAULT_LAMBDA_FUNCTION,
+            'lambda_event': c.DEFAULT_LAMBDA_EVENT,
+            'memory_sets': c.DEFAULT_MEMORY_SETS,
+            'timeout': c.DEFAULT_LAMBDA_TIMEOUT,
+        }
+
+        self.benchmarking = Benchmark(**self.params)  # Use default arguments
 
     def test_original_config_stringifier(self):
         '''Test stringifier of original Lambda configurations'''
@@ -254,7 +278,7 @@ class TestBenchmark(unittest.TestCase):
         result = self.benchmarking.store_original_config()
 
         get_lambda_config.assert_called_with(
-            function_name=c.DEFAULT_LAMBDA_FUNCTION,
+            function_name=self.params['lambda_function'],
         )
 
         self.assertIsNone(result['error'])
@@ -264,7 +288,7 @@ class TestBenchmark(unittest.TestCase):
         )
         self.assertEqual(
             self.benchmarking.original_config['timeout'],
-            c.DEFAULT_LAMBDA_TIMEOUT,
+            self.params['timeout'],
         )
 
         logger.warning.assert_not_called()
@@ -301,7 +325,7 @@ class TestBenchmark(unittest.TestCase):
         self.assertIsNone(result['error'])
 
         update_lambda_config.assert_called_with(
-            function_name=c.DEFAULT_LAMBDA_FUNCTION,
+            function_name=self.params['lambda_function'],
             memory_size=memory,
             timeout=timeout,
         )
@@ -337,12 +361,13 @@ class TestBenchmark(unittest.TestCase):
 
         response, success, error = self.benchmarking.set_new_config(
             new_memory=test_memory_size,
+            new_timeout=self.params['timeout'],
         )
 
         update_lambda_config.assert_called_with(
-            function_name=c.DEFAULT_LAMBDA_FUNCTION,
+            function_name=self.params['lambda_function'],
             memory_size=test_memory_size,
-            timeout=c.DEFAULT_LAMBDA_TIMEOUT,
+            timeout=self.params['timeout'],
         )
 
         self.assertIsInstance(response, dict)
@@ -361,6 +386,7 @@ class TestBenchmark(unittest.TestCase):
 
         response, success, error = self.benchmarking.set_new_config(
             new_memory=test_memory_size,
+            new_timeout=self.params['timeout'],
         )
 
         self.assertIsNone(response)
@@ -397,8 +423,8 @@ class TestBenchmark(unittest.TestCase):
         result = self.benchmarking.get_execution_time()
 
         invoke_lambda.assert_called_with(
-            function_name=c.DEFAULT_LAMBDA_FUNCTION,
-            payload=c.DEFAULT_LAMBDA_EVENT,
+            function_name=self.params['lambda_function'],
+            payload=self.params['lambda_event'],
             invocation_type='RequestResponse',
             log_type='None',
         )
@@ -454,24 +480,24 @@ class TestBenchmark(unittest.TestCase):
     def test_get_benchmark_durations(self):
         '''Test running benchmark routine for a given memory size'''
         lambda_states = reset_lambda_states(
-            max_threads=c.DEFAULT_MAX_THREADS,
-            test_count=c.DEFAULT_TEST_COUNT,
+            max_threads=self.params['max_threads'],
+            test_count=self.params['test_count'],
         )
 
         remaining_times = reset_lambda_remaining_time(
             invocations=len(lambda_states),
-            timeout=c.DEFAULT_LAMBDA_TIMEOUT,
+            timeout=self.params['timeout'],
         )
 
         self.assertTrue(len(lambda_states) == len(remaining_times))
 
         durations = self.benchmarking.get_benchmark_durations()
 
-        self.assertEqual(len(durations), c.DEFAULT_TEST_COUNT)
+        self.assertEqual(len(durations), self.params['test_count'])
 
         # Check if all durations match remainingtimes provided
         for duration in durations:
-            remaining_time = c.DEFAULT_LAMBDA_TIMEOUT - duration
+            remaining_time = self.params['timeout'] - duration
             self.assertIn(remaining_time, remaining_times)
 
     @patch('benchmark.logger')
@@ -556,6 +582,102 @@ class TestBenchmark(unittest.TestCase):
 
         logger.warning.assert_called()
         logger.exception.assert_called()
+
+
+class TestLambdaHandler(unittest.TestCase):
+    '''Test Lambda handler entire cycle'''
+
+    def setUp(self):
+        self.params = {
+            'verbose': False,
+            'ignore_coldstart': True,
+            'test_count': c.DEFAULT_TEST_COUNT,
+            'max_threads': c.DEFAULT_MAX_THREADS,
+            'lambda_function': c.DEFAULT_LAMBDA_FUNCTION,
+            'lambda_event': c.DEFAULT_LAMBDA_EVENT,
+            'memory_sets': c.DEFAULT_MEMORY_SETS,
+            'timeout': c.DEFAULT_LAMBDA_TIMEOUT,
+        }
+
+        self.lambda_states = reset_lambda_states(
+            max_threads=self.params['max_threads'],
+            test_count=self.params['test_count'],
+        )
+
+        self.remaining_times = reset_lambda_remaining_time(
+            invocations=len(self.lambda_states),
+            timeout=self.params['timeout'],
+        )
+
+        self.benchmarking = Benchmark(**self.params)  # Use default arguments
+
+    @patch('lambda_function.print_payload')
+    def test_invalid_event(self, print_payload):
+        '''Test Lambda handler with an invalid event'''
+        invalid_event = {'foo': 'bar'}
+
+        response = lambda_handler(event=invalid_event, context={})
+
+        print_payload.assert_has_calls([
+            call(payload_type='event', payload_obj=invalid_event),
+            call(payload_type='response', payload_obj=response),
+        ])
+
+        self.assertEqual(response['status'], 400)
+        self.assertEqual(len(response['results']), 0)
+        self.assertEqual(len(response['errors']), 1)
+        self.assertIn('Invalid event key', response['errors'][0])
+
+    @patch('lambda_function.Benchmark', new_callable=CustomMock.benchmark_fail_regular)  # NOQA
+    @patch('lambda_function.logger')
+    @patch('lambda_function.print_payload')
+    def test_benchmark_fail_regular(self, print_payload, logger, Benchmark):
+        '''Test full processing cycle'''
+        response = lambda_handler(event=self.params, context={})
+
+        Benchmark.assert_called()
+
+        logger.error.assert_called()
+        logger.exception.assert_called()
+
+        self.assertEqual(response['status'], 500)
+        self.assertTrue(len(response['results']) == 0)
+        self.assertTrue(len(response['errors']) > 0)
+        self.assertIn('Sorry there was an internal error', response['errors'])
+
+    @patch('lambda_function.Benchmark', new_callable=CustomMock.benchmark_fail_custom)  # NOQA
+    @patch('lambda_function.logger')
+    @patch('lambda_function.print_payload')
+    def test_benchmark_fail_custom(self, print_payload, logger, Benchmark):
+        '''Test full processing cycle'''
+        response = lambda_handler(event=self.params, context={})
+
+        Benchmark.assert_called()
+
+        logger.error.assert_not_called()
+        logger.exception.assert_not_called()
+
+        self.assertEqual(response['status'], 500)
+        self.assertTrue(len(response['results']) == 0)
+        self.assertTrue(len(response['errors']) > 0)
+        self.assertIn(
+            'CustomBenchmarkException: custom_foobar', response['errors'])
+
+    @patch('benchmark.get_lambda_config', new_callable=CustomMock.get_lambda_config)  # NOQA
+    @patch('benchmark.update_lambda_config', new_callable=CustomMock.update_lambda_config)  # NOQA
+    @patch('benchmark.invoke_lambda', new_callable=CustomMock.invoke_lambda_get_durations)  # NOQA
+    @patch('benchmark.logger')
+    @patch('lambda_function.logger')
+    def test_full_cycle(
+            self,
+            handler_logger,
+            benchmark_logger,
+            invoke_lambda,
+            update_lambda_config,
+            get_lambda_config,
+            ):
+        '''Test full Lambda handler execution cycle'''
+        pass
 
 
 def reset_lambda_states(*, max_threads: int, test_count: int) -> list:
