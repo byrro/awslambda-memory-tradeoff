@@ -264,6 +264,19 @@ class Benchmark():
 
         result['durations'] = self.get_benchmark_durations()
 
+        if len(result['durations']) == 0:
+            error = custom_exc.InvokeLambdaError(
+                'No durations were returned from invocations of Lambda '
+                f'({self.lambda_function}) with memory {memory}'
+            )
+
+            result['success'] = False
+            result['errors'].append(error)
+
+            logger.warning(error)
+
+            return result
+
         result['average_duration'] = \
             round(sum(result['durations']) / len(result['durations']))
 
